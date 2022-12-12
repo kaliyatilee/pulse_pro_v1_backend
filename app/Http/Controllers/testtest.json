@@ -1,0 +1,26 @@
+{
+  "user": {
+    "id": 1,
+    "name": "vguyo",
+    "first_name": "Vincent H",
+    "last_name": "Guyo",
+    "email": "vince@vokers.co.zw",
+    "natid": "63-2321066-F-71",
+    "mobile": "0773418009",
+    "bot_number" : "263773418009",
+    "email_verified_at": null,
+    "password_changed": false,
+    "pwd_last_changed": null,
+    "utype": "System",
+    "locale": "1",
+    "signup_ip_address": null,
+    "signup_confirmation_ip_address": "107.114.63.41",
+    "signup_sm_ip_address": null,
+    "admin_ip_address": "29.21.205.252",
+    "updated_ip_address": null,
+    "deleted_ip_address": null,
+    "created_at": "2021-07-27T17:28:13.000000Z",
+    "updated_at": "2021-07-27T17:28:13.000000Z",
+    "deleted_at": null
+  }
+}

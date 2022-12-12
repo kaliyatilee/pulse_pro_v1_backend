@@ -1,0 +1,505 @@
+<?php
+
+namespace App\Http\Controllers;
+
+
+use Illuminate\Http\Request;
+use App\Models\Activities;
+use App\Models\AssignGoal;
+use App\Models\Reward;
+use App\Models\Transaction;
+use App\Models\User;
+use Carbon\Carbon;
+use App\Models\Merchant;
+use App\Models\Product;
+use App\Repositories\MerchantRepository;
+use App\Models\Corporate;
+use App\Repositories\CorporateRepository;
+use App\Repositories\UserRepository;
+use App\Repositories\ProductRepository;
+use App\Repositories\RewardRepository;
+use App\Repositories\TransactionRepository;
+use App\Models\Activitylog;
+use App\Repositories\ActivitylogRepository;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
+
+use App\Models\Members;
+use App\Models\PartnerWellnessPlan;
+use App\Models\PartnerMasterGoals;
+use RealRashid\SweetAlert\Facades\Alert;
+use DB;
+use Mail;
+use Maatwebsite\Excel\Facades\Excel;
+use App\Imports\ProductImport;
+
+class MerchantController extends Controller
+{
+     /**
+     * Create a new controller instance.
+     *
+     * @return void
+     */
+    protected $merchantRepository;
+    protected $corporateRepository;
+    protected $userRepository;
+    protected $productRepository;
+    protected $rewardRepository;
+    protected $transactionRepository;
+    protected $activitylogRepository;
+    public function __construct(MerchantRepository $merchantRepository, CorporateRepository $corporateRepository, UserRepository $userRepository, ProductRepository $productRepository, RewardRepository $rewardRepository, TransactionRepository $transactionRepository, ActivitylogRepository $activitylogRepository)
+    {
+        // $this->middleware('auth');
+        $this->merchantRepository = $merchantRepository;
+        $this->corporateRepository = $corporateRepository;
+        $this->userRepository = $userRepository;
+        $this->productRepository = $productRepository;
+        $this->rewardRepository = $rewardRepository;
+        $this->transactionRepository = $transactionRepository;
+        $this->activitylogRepository = $activitylogRepository;
+    }
+
+    public function index()
+    {
+        // dd('index');
+        $userdata = auth()->user();
+        $partner = $userdata->partner;
+        $partnerdata = array(
+            'name' => $partner->name,
+            'logo' => $partner->logo,
+            'pri_color' => $partner->pri_color ? $partner->pri_color : "#8cc640",
+            'sec_color' => $partner->sec_color ? $partner->sec_color : "#8cc640",
+        );
+        $totalmember = [];
+        $data = array(
+            "totalmembers" => 0,
+            "submembers" => 0,
+            "newMembers" => 0,
+            "activemembers" => 0,
+            "rewardslist" => 0,
+            "rewardsallocated" => 0,
+            "rewardsnew" => 0,
+            "newrewards" => 0,
+            "wellnessplans" => 0,
+            "newsfeed" => 0,
+            "wellnessgoals" => 0,
+        );
+
+        $activeMembers = Members::where('partner_id', $userdata->partner_id)->where('status', 'active')->count();
+        $subMembers = Members::where('partner_id', $userdata->partner_id)->count();
+        $newMembers = Members::where('partner_id', $userdata->partner_id)->whereDay('created_at', '=', date('d'))
+            ->whereMonth('created_at', '=', date('m'))->whereYear('created_at', '=', date('Y'))->count();
+
+        $newMembersList = Members::where('partner_id', $userdata->partner_id)->whereDay('created_at', '=', date('d'))
+            ->whereMonth('created_at', '=', date('m'))->whereYear('created_at', '=', date('Y'))->get();
+        $wellnessplans = PartnerWellnessPlan::where('partner_id', $partner->id)->count();
+        $wellnessgoals = PartnerMasterGoals::where('partner_id', $partner->id)->count();
+        $data['activemembers'] = $activeMembers;
+        $data['submembers'] = $subMembers;
+        $data['newMembers'] = $newMembers;
+        $data['wellnessplans'] = $wellnessplans;
+        $data['wellnessgoals'] = $wellnessgoals;
+
+
+        return view('merchant.dashboard', compact('newMembersList'), array(
+                "userdata" => $userdata,
+                "partnerdata" => $partnerdata,
+                "data" => $data,
+            )
+        );
+    }
+
+    public function addproduct()
+    {
+        $userdata = auth()->user();
+        $partner = $userdata->partner;
+        $partnerdata = array(
+            'name' => $partner->name,
+            'logo' => $partner->logo,
+            'pri_color' => $partner->pri_color ? $partner->pri_color : "#8cc640",
+            'sec_color' => $partner->sec_color,
+        );
+
+        if (session('success_message')) {
+            Alert::success('Success', session('success_message'));
+        }
+        return view('merchant.addproduct', array(
+            "userdata" => $userdata,
+            "partnerdata" => $partnerdata
+        ));
+    }
+
+    public function editproduct($id)
+    {
+        $userdata = auth()->user();
+        $partner = $userdata->partner;
+        $partnerdata = array(
+            'name' => $partner->name,
+            'logo' => $partner->logo,
+            'pri_color' => $partner->pri_color ? $partner->pri_color : "#8cc640",
+            'sec_color' => $partner->sec_color,
+        );
+        $product = Reward::where('id', $id)->first();
+        return view('merchant.editproduct', compact('product'), array(
+            "userdata" => $userdata,
+            "partnerdata" => $partnerdata
+        ));
+    }
+    
+    public function viewproduct($id)
+    {
+        $userdata = auth()->user();
+        $partner = $userdata->partner;
+        $partnerdata = array(
+            'name' => $partner->name,
+            'logo' => $partner->logo,
+            'pri_color' => $partner->pri_color ? $partner->pri_color : "#8cc640",
+            'sec_color' => $partner->sec_color,
+        );
+        $product = Reward::where('id', $id)->first();
+        return view('merchant.viewproduct', compact('product'), array(
+            "userdata" => $userdata,
+            "partnerdata" => $partnerdata
+        ));
+    }
+
+    public function saveproduct(Request $request)
+    {
+      
+        if(!empty($request->id)) {
+
+            if (isset($request->productimage) && $request->productimage != '') {
+                $productimagereq = 'required|image|mimes:jpg,png,jpeg,gif,svg';
+            } else {
+                $product = Reward::where('id', $request->id)->first();
+                if(!empty($product->productimage)){
+                    $productimagereq = '';
+                } else {
+                    $productimagereq = 'required|image|mimes:jpg,png,jpeg,gif,svg';
+                }
+            }
+
+            $this->validate(request(), [
+                'productname' => 'required|min:3|max:35',
+                'productdescription' => 'required',
+                'amount' => 'required',
+                'productimage' => $productimagereq,
+            ]);
+           
+        } else {
+            $this->validate(request(), [
+                'productname' => 'required|min:3|max:35',
+                'productdescription' => 'required',
+                'amount' => 'required',
+                'productimage' => 'required|image|mimes:jpg,png,jpeg,gif,svg',
+            ]);
+        }
+          
+        // if (isset($request->productimage) && $request->productimage != '') {
+        //     $productimage = \App\Helpers\Helpers::uploadFile($request, 'productimage', public_path('/storage/products/original'));
+        // }
+
+        /* save corporate */
+        $user = [];
+        if(!empty($request->id)){
+            $user['id'] = $request->id;
+        }
+        $user['reward_name'] = $request->productname;
+        $user['description'] = $request->productdescription;
+        $user['amount'] = $request->amount;
+        // if(isset($productimage)){
+        //     $user['productimage'] = $productimage;
+        // }
+        if (isset($request->productimage) && $request->productimage != '') {
+            // $path = $request->file('productimage')->store('pulsehealth/images', 's3');
+            // Storage::disk('s3')->setVisibility($path, 'public');
+
+            $path = $request->file('productimage')->store('pulsehealth/images', 's3');
+            Storage::disk('s3')->setVisibility($path, 'public');
+            $fullpath = Storage::disk('s3')->url($path);
+            $fullpath = str_ireplace("/core","", $fullpath);
+
+            $user['imageurl'] = $fullpath;
+            $user['productimage'] = $fullpath;
+        }
+
+        $user['status'] = 'pending';
+        if(!empty($request->id)) { } else {
+            $user['userId'] = Auth::user()->id;
+        }
+        $user['created_at'] = date("Y-m-d H:i:s");
+        $addUser = $this->rewardRepository->save($user);
+        if ($addUser) {
+            if(!empty($request->id)){
+
+                $activtylog['user_id'] = Auth::user()->id;
+                $activtylog['activity'] = $request->productname . ' Product updated';
+                $activtylog['status'] = 'active';
+                $activtylog['updated_at'] = date("Y-m-d H:i:s");
+                $activtylogadded = $this->activitylogRepository->save($activtylog);
+
+                $message = 'Record updated successfully.';
+            } else {
+
+                $activtylog['user_id'] = Auth::user()->id;
+                $activtylog['activity'] = $request->productname . ' Product added';
+                $activtylog['status'] = 'active';
+                $activtylog['updated_at'] = date("Y-m-d H:i:s");
+                $activtylogadded = $this->activitylogRepository->save($activtylog);
+
+                $message = 'Record added successfully.';
+            }
+            return redirect()->route('productlist')->with('success', $message);
+        } else {
+            return redirect()->back()->withErrors('Submission Failed')->withInput();
+        }
+    }
+
+    public function saveproductFromImport(Request $request)
+    {     
+        if ($request->hasFile('importFile')) {
+            try {
+                Excel::import(new ProductImport,request()->file('importFile'));
+                
+                $message = 'Record added successfully.';
+                return redirect()->route('productlist')->with('success', $message);
+
+            } catch (\Exception $e) {
+                $message = $e->getMessage(); //'Submission Failed.';
+                return redirect()->route('productlist')->with('failed', $message);
+            }
+        }
+    }
+
+    public function productlist()
+    {
+        $userdata = auth()->user();
+       
+        $partner = $userdata->partner;
+        $partnerdata = array(
+            'name' => $partner->name,
+            'logo' => $partner->logo,
+            'pri_color' => $partner->pri_color ? $partner->pri_color : "#8cc640",
+            'sec_color' => $partner->sec_color,
+        );
+
+        if($userdata->role == 'super'){
+            $products = Reward::get();
+        } else {
+            $products = Reward::where('userId', Auth::user()->id)->get();
+        }
+
+        if (session('success_message')) {
+            Alert::success('Success', session('success_message'));
+        }
+       
+        return view('merchant.productlist', compact('products'), array(
+            "userdata" => $userdata,
+            "partnerdata" => $partnerdata,
+            "role" => $userdata->role
+        ));
+    }
+
+    public function productlistexport()
+    {
+        $userdata = auth()->user();
+       
+        $partner = $userdata->partner;
+        $partnerdata = array(
+            'name' => $partner->name,
+            'logo' => $partner->logo,
+            'pri_color' => $partner->pri_color ? $partner->pri_color : "#8cc640",
+            'sec_color' => $partner->sec_color,
+        );
+
+        // Excel file name for download 
+        $fileName = "product-data_" . date('Y-m-d') . ".xls"; 
+ 
+        // Column names 
+        $fields = array('Name', 'Status', 'Image'); 
+                
+        // Display column names as first row 
+        $excelData = implode("\t", array_values($fields)) . "\n"; 
+
+        if($userdata->role == 'super'){
+            $merchants = Reward::get();
+        } else {
+            $merchants = Reward::where('userId', Auth::user()->id)->get();
+        }
+
+        if(isset($merchants)){
+            foreach($merchants as $merchant){
+                $status = ucwords(strtolower($merchant->status)); 
+                $lineData = array($merchant->reward_name, $status, $merchant->productimage); 
+                $excelData .= implode("\t", array_values($lineData)) . "\n"; 
+            }
+        } else {
+            $excelData .= 'No records found...'. "\n"; 
+        }
+        
+        // Headers for download 
+        header("Content-Type: application/vnd.ms-excel"); 
+        header("Content-Disposition: attachment; filename=\"$fileName\""); 
+        
+        // Render excel data 
+        echo $excelData; 
+        
+        exit;
+        
+    }
+
+
+    public function manageproducts()
+    {
+        $userdata = auth()->user();
+       
+        $partner = $userdata->partner;
+        $partnerdata = array(
+            'name' => $partner->name,
+            'logo' => $partner->logo,
+            'pri_color' => $partner->pri_color ? $partner->pri_color : "#8cc640",
+            'sec_color' => $partner->sec_color,
+        );
+
+        if($userdata->role == 'super'){
+            $products = Reward::where('status', 'approved')->get();
+        } else {
+            $products = Reward::where('userId', Auth::user()->id)->where('status', 'approved')->get();
+        }
+
+        if (session('success_message')) {
+            Alert::success('Success', session('success_message'));
+        }
+       
+        return view('merchant.manageproducts', compact('products'), array(
+            "userdata" => $userdata,
+            "partnerdata" => $partnerdata,
+            "role" => $userdata->role
+        ));
+    }
+
+    
+    public function productstatus(Request $request)
+    {
+        $user = [];
+        if(!empty($request->id)){
+            $user['id'] = $request->id;
+        }
+        $user['status'] = $request->status;
+
+        $product = Reward::where('id', $request->id)->first();
+        $userdata = User::where('id', $product->userId)->first();
+
+        $useremail = strtolower($userdata->email);
+        $data = array(
+            'logo' => url('/public/assets/img/logo-psmas.png'),
+            'fullname' => ucwords(strtolower($userdata->name)),
+            'useremail' => $useremail,
+            'productstatus' => ucwords(strtolower($request->status)),
+            'productname' => ucwords(strtolower($product->productname)),
+        );
+
+        //code to send email to my inbox
+        Mail::send('emails.productstatus', $data, function($message) use ($data){
+            $message->from('admin@pulsehealth.com', 'Pulsehealth');
+            $message->to($data['useremail']);
+            $message->subject('Your product status update on Pulsehealth');
+        });
+       
+        $addUser = $this->rewardRepository->save($user);
+
+        $activtylog['user_id'] = Auth::user()->id;
+        $activtylog['activity'] = $product->productname . ' Product status updated to '. $request->status;
+        $activtylog['status'] = 'active';
+        $activtylog['updated_at'] = date("Y-m-d H:i:s");
+        $activtylogadded = $this->activitylogRepository->save($activtylog);
+
+        return '1';
+    }
+
+    public function editmanageproduct($id)
+    {
+        $userdata = auth()->user();
+        $partner = $userdata->partner;
+        $partnerdata = array(
+            'name' => $partner->name,
+            'logo' => $partner->logo,
+            'pri_color' => $partner->pri_color ? $partner->pri_color : "#8cc640",
+            'sec_color' => $partner->sec_color,
+        );
+        $product = Reward::where('id', $id)->first();
+        return view('merchant.editmanageproduct', compact('product'), array(
+            "userdata" => $userdata,
+            "partnerdata" => $partnerdata
+        ));
+    }
+
+    public function savemanageproduct(Request $request)
+    {
+      
+        $this->validate(request(), [
+            'totalQty' => 'required|numeric|min:1',
+        ]);
+      
+        /* save corporate */
+        $user = [];
+        if(!empty($request->id)){
+            $user['id'] = $request->id;
+        }
+        $user['totalQty'] = $request->totalQty;
+        $addUser = $this->rewardRepository->save($user);
+        if ($addUser) {
+            if(!empty($request->id)){
+
+                $activtylog['user_id'] = Auth::user()->id;
+                $activtylog['activity'] = 'Product QTY updated to '. $request->totalQty;
+                $activtylog['status'] = 'active';
+                $activtylog['updated_at'] = date("Y-m-d H:i:s");
+                $activtylogadded = $this->activitylogRepository->save($activtylog);
+                
+                $message = 'Record updated successfully.';
+            } else {
+                $message = 'Record added successfully.';
+            }
+            return redirect()->route('manageproducts')->with('success', $message);
+        } else {
+            return redirect()->back()->withErrors('Submission Failed')->withInput();
+        }
+    }
+
+
+    
+    public function purchasehistory()
+    {
+        $userdata = auth()->user();
+       
+        $partner = $userdata->partner;
+        $partnerdata = array(
+            'name' => $partner->name,
+            'logo' => $partner->logo,
+            'pri_color' => $partner->pri_color ? $partner->pri_color : "#8cc640",
+            'sec_color' => $partner->sec_color,
+        );
+
+        if($userdata->role == 'super'){
+            $products = Transaction::query()->join('rewards', 'rewards.id', '=' , 'transactions.reward_id')->get();
+          
+        } else {
+            // $products = Reward::where('userId', Auth::user()->id)->where('status', 'approved')->get();
+            $products = Transaction::query()->join('rewards', 'rewards.id', '=' , 'transactions.reward_id')->where('rewards.userId', Auth::user()->id)->get();
+        }
+
+        if (session('success_message')) {
+            Alert::success('Success', session('success_message'));
+        }
+       
+        return view('merchant.purchasehistory', compact('products'), array(
+            "userdata" => $userdata,
+            "partnerdata" => $partnerdata,
+            "role" => $userdata->role
+        ));
+    }
+    
+    
+}

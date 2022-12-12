@@ -1,0 +1,707 @@
+<?php
+
+
+namespace App\Http\Controllers;
+
+
+use Illuminate\Http\Request;
+use App\Models\Activities;
+use App\Models\AssignGoal;
+use App\Models\Reward;
+use App\Models\Transaction;
+use App\Models\User;
+use Carbon\Carbon;
+use App\Models\Merchant;
+use App\Models\Product;
+use App\Models\Corporate;
+use App\Models\Partner;
+use App\Repositories\CorporateRepository;
+use App\Repositories\UserRepository;
+use App\Repositories\ProductRepository;
+use App\Repositories\RewardRepository;
+use App\Repositories\TransactionRepository;
+use App\Models\Subscriptions;
+use App\Repositories\SubscriptionsRepository;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
+use App\Models\Activitylog;
+use App\Repositories\ActivitylogRepository;
+
+use App\Models\Members; 
+use App\Models\Newsfeed; 
+use App\Repositories\NewsfeedRepository;
+use App\Models\PartnerWellnessPlan;
+use App\Models\PartnerMasterGoals;
+use RealRashid\SweetAlert\Facades\Alert;
+use DB;
+use Mail;
+
+
+class PartnerController extends Controller
+{
+
+    /**
+     * Create a new controller instance.
+     *
+     * @return void
+     */
+    protected $userRepository;
+    protected $subscriptionsRepository;
+    protected $activitylogRepository;
+    public function __construct(UserRepository $userRepository, SubscriptionsRepository $subscriptionsRepository, ActivitylogRepository $activitylogRepository)
+    {
+//        $this->middleware('auth');
+        $this->userRepository = $userRepository;
+        $this->subscriptionsRepository = $subscriptionsRepository;
+        $this->activitylogRepository = $activitylogRepository;
+    }
+
+    public function index()
+    {
+        // dd('index');
+        $userdata = auth()->user();
+        $partner = $userdata->partner;
+        $partnerdata = array(
+            'name' => $partner->name,
+            'logo' => $partner->logo,
+            'pri_color' => $partner->pri_color ? $partner->pri_color : "#8cc640",
+            'sec_color' => $partner->sec_color ? $partner->sec_color : "#8cc640",
+        );
+        $totalmember = [];
+        $data = array(
+            "totalmembers" => 0,
+            "submembers" => 0,
+            "newMembers" => 0,
+            "activemembers" => 0,
+            "rewardslist" => 0,
+            "rewardsallocated" => 0,
+            "rewardsnew" => 0,
+            "newrewards" => 0,
+            "wellnessplans" => 0,
+            "newsfeed" => 0,
+            "wellnessgoals" => 0,
+            "totalsubscribers" => 0,
+            "peicount"=>0
+        );
+        $totalmembers = User::where('partner_id', $userdata->id)->count();
+        
+        $activeMembers = User::where('partner_id', $userdata->id)->where('status', 'active')->count();
+        $totalsubscribers = Subscriptions::where('user_id', $userdata->id)->where('status', 'active')->count();
+
+       // $activeMembers = Members::where('partner_id', $userdata->partner_id)->where('status', 'active')->count();
+        $subMembers = Members::where('partner_id', $userdata->partner_id)->count();
+        $newMembers = Members::where('partner_id', $userdata->partner_id)->whereDay('created_at', '=', date('d'))
+            ->whereMonth('created_at', '=', date('m'))->whereYear('created_at', '=', date('Y'))->count();
+
+        $newMembersList = Members::where('partner_id', $userdata->partner_id)->whereDay('created_at', '=', date('d'))
+            ->whereMonth('created_at', '=', date('m'))->whereYear('created_at', '=', date('Y'))->get();
+        $wellnessplans = PartnerWellnessPlan::where('partner_id', $partner->id)->count();
+        $wellnessgoals = PartnerMasterGoals::where('partner_id', $partner->id)->count();
+        $data['activemembers'] = $activeMembers;
+        $data['totalmembers'] = $totalmembers;
+        $data['totalsubscribers'] = $totalsubscribers;
+        $data['submembers'] = $subMembers;
+        $data['newMembers'] = $newMembers;
+        $data['wellnessplans'] = $wellnessplans;
+        $data['wellnessgoals'] = $wellnessgoals;
+
+        $Underweight = User::where('partner_id', $userdata->id)->where('status', 'active')->where('bmi','<','18.5')->count();
+        $Overweight = User::where('partner_id', $userdata->id)->where('status', 'active')->where('bmi','>','24.9')->count();
+        $Normal = User::where('partner_id', $userdata->id)->where('status', 'active')->where('bmi','>=','18.5')->where('bmi','<=','24.9')->count();
+
+        $data['peicount'] = $Underweight . ',' .$Overweight .','.$Normal;
+
+        return view('partner.dashboard', compact('newMembersList'), array(
+                "userdata" => $userdata,
+                "partnerdata" => $partnerdata,
+                "data" => $data,
+            )
+        );
+    }
+    public function store(Request $request) {
+        $this->validate($request, [
+            'firstname' => ['required', 'string', 'max:255'],
+            'lastname' => ['required', 'string', 'max:255'],
+            'company' => ['required', 'string', 'max:255'],
+            'personal_email' => ['required', 'string', 'email', 'max:255'],
+            'company_email' => ['required', 'string', 'email', 'max:255'],
+            'address' => ['required', 'string', 'max:255'],
+            'phone' => ['required', 'string', 'max:255'],
+            'logo' => ['required', 'string', 'max:255'],
+            'pri_color' => ['required', 'string', 'max:255'],
+            'sec_color' => ['required', 'string', 'max:255'],
+        ]);
+
+        // -> Creating Partner
+        $partner = Partner::create([
+            'name' => $request->company,
+            'email' => $request->company_email,
+            'address' => $request->address,
+            'phone' => $request->phone,
+            'logo' => $request->logo,
+            'pri_color' => $request->pri_color,
+            'sec_color' => $request->sec_color,
+        ]);
+
+        // -> Add user with admin roles for the created partner
+        $admin = User::create([
+            "firstname" => $request->firstname,
+            "lastname" => $request->lastname,
+            "email" => $request->personal_email,
+            "password" => Hash::make('password123'),
+            "role" => "admin",
+            "partner_id" => $partner->id
+        ]);
+        $newID = $admin->id;
+        $newlyInsertedUser = User::find($newID);
+        $newlyInsertedUser->assignRole('admin');
+
+        return response(['status', 'successful'], 200);
+    }
+
+
+
+    public function partneruserslist(Request $request)
+    {
+        //        dd($id);
+        $userdata = auth()->user();
+        $partner = $userdata->partner;
+        $partnerdata = array(
+            'name' => $partner->name,
+            'logo' => $partner->logo,
+            'pri_color' => $partner->pri_color ? $partner->pri_color : "#8cc640",
+            'sec_color' => $partner->sec_color,
+        );
+        //dd($partner["id"]);
+
+
+        $corporates = User::where('partner_id', $userdata->id)->get();
+
+        if (session('success_message')) {
+            Alert::success('Success', session('success_message'));
+        }
+        return view('partner.partneruserslist', compact('corporates', $corporates), array(
+            "userdata" => $userdata,
+            "partnerdata" => $partnerdata
+        ));
+    }
+
+    
+    public function partneruserslistexport(Request $request)
+    {
+        //        dd($id);
+        $userdata = auth()->user();
+        $partner = $userdata->partner;
+        $partnerdata = array(
+            'name' => $partner->name,
+            'logo' => $partner->logo,
+            'pri_color' => $partner->pri_color ? $partner->pri_color : "#8cc640",
+            'sec_color' => $partner->sec_color,
+        );
+        //dd($partner["id"]);
+
+        // Excel file name for download 
+        $fileName = "user-data_" . date('Y-m-d') . ".xls"; 
+ 
+        // Column names 
+        $fields = array('Name', 'Email', 'Phone'); 
+                
+        // Display column names as first row 
+        $excelData = implode("\t", array_values($fields)) . "\n"; 
+
+        $merchants = User::where('partner_id', $userdata->id)->get();
+
+        
+        if(isset($merchants)){
+            foreach($merchants as $merchant){
+                $lineData = array($merchant->name, $merchant->email, $merchant->phone); 
+                $excelData .= implode("\t", array_values($lineData)) . "\n"; 
+            }
+        } else {
+            $excelData .= 'No records found...'. "\n"; 
+        }
+        
+        // Headers for download 
+        header("Content-Type: application/vnd.ms-excel"); 
+        header("Content-Disposition: attachment; filename=\"$fileName\""); 
+        
+        // Render excel data 
+        echo $excelData; 
+        
+        exit;
+    }
+
+
+    public function partnernewuser()
+    {
+        $userdata = auth()->user();
+        $partner = $userdata->partner;
+        $partnerdata = array(
+            'name' => $partner->name,
+            'logo' => $partner->logo,
+            'pri_color' => $partner->pri_color ? $partner->pri_color : "#8cc640",
+            'sec_color' => $partner->sec_color,
+        );
+        return view('partner.partneradduser', array(
+            "userdata" => $userdata,
+            "partnerdata" => $partnerdata
+        ));
+    }
+
+    public function savepartneruser(Request $request)
+    {
+      
+        if(!empty($request->id)) {           
+            $this->validate(request(), [
+                'name' => 'required|min:3|max:35',
+                'email' => 'email|unique:users,email,'.$request->id,
+                'phone' => 'required|digits:10|unique:users,phone,'.$request->id,
+            ]);
+           
+        } else {
+            $this->validate(request(), [
+                'name' => 'required|min:3|max:35',
+                'email' => 'email|unique:users,email',
+                'phone' => 'required|digits:10|unique:users,phone',
+                'password' => 'required|confirmed',
+                'password_confirmation' => 'required',
+            ]);
+        }
+        $userdata = auth()->user();
+       
+        /* save merchant */
+        $user = [];
+        if(!empty($request->id)){
+            $user['id'] = $request->id;
+        }
+        $user['name'] = ucwords(strtolower($request->name));
+        $user['email'] = strtolower($request->email);
+        $user['phone'] = $request->phone;
+        $user['password'] = Hash::make($request->password);
+        $user['partner_id'] = $userdata->id;
+        $user['role'] = 'user';
+        $user['status'] = 'active';
+        $user['created_at'] = date("Y-m-d H:i:s");
+        $addUser = $this->userRepository->save($user);
+        
+        if ($addUser) {
+           
+            if(!empty($request->id)){
+
+                    $activtylog['user_id'] = Auth::user()->id;
+                    $activtylog['activity'] = 'Updated user';
+                    $activtylog['status'] = 'active';
+                    $activtylog['updated_at'] = date("Y-m-d H:i:s");
+                    $activtylogadded = $this->activitylogRepository->save($activtylog);
+                    
+                    $message = 'Record updated successfully.';
+               
+
+                return redirect()->route('partneruserslist')->with('success', $message);
+
+             } else {
+
+                $activtylog['user_id'] = Auth::user()->id;
+                $activtylog['activity'] = 'Added user';
+                $activtylog['status'] = 'active';
+                $activtylog['updated_at'] = date("Y-m-d H:i:s");
+                $activtylogadded = $this->activitylogRepository->save($activtylog);
+
+                $message = 'Record added successfully.';
+                
+                $useremail = strtolower($request->email);
+                $data = array(
+                    'logo' => url('/public/assets/img/logo-psmas.png'),
+                    'fullname' => ucwords(strtolower($request->name)),
+                    'useremail' => $useremail,
+                    'member' => 'user',
+                );
+
+                //code to send email to my inbox
+                Mail::send('emails.newmember', $data, function($message) use ($data){
+                    $message->from('admin@pulsehealth.com', 'Pulsehealth');
+                    $message->to($data['useremail']);
+                    $message->subject('Welcome to Pulsehealth');
+                });
+
+                if (Mail::failures()) { 
+                    return redirect()->route('partneruserslist')->with('success', 'Email sent failed!');
+                } else { 
+                    
+                    if(!empty($request->id)){
+                        $message = 'Record updated successfully.';
+                    } else {
+                        $message = 'Record added successfully.';
+                    }
+    
+                    return redirect()->route('partneruserslist')->with('success', $message);
+                }
+            }
+        } else {
+            return redirect()->back()->withErrors('Submission Failed')->withInput();
+        }
+    }
+
+    public function editpartneruser($id)
+    {
+        $userdata = auth()->user();
+        $partner = $userdata->partner;
+        $partnerdata = array(
+            'name' => $partner->name,
+            'logo' => $partner->logo,
+            'pri_color' => $partner->pri_color ? $partner->pri_color : "#8cc640",
+            'sec_color' => $partner->sec_color,
+        );
+        $corpouser = User::where('id', $id)->where('role', 'user')->first();
+        return view('partner.editpartneruser', compact('corpouser'), array(
+            "userdata" => $userdata,
+            "partnerdata" => $partnerdata
+        ));
+    }
+
+    public function viewpartneruser($id)
+    {
+        $userdata = auth()->user();
+        $partner = $userdata->partner;
+        $partnerdata = array(
+            'name' => $partner->name,
+            'logo' => $partner->logo,
+            'pri_color' => $partner->pri_color ? $partner->pri_color : "#8cc640",
+            'sec_color' => $partner->sec_color,
+        );
+        $corpouser = User::where('id', $id)->where('role', 'user')->first();
+        return view('partner.viewpartneruser', compact('corpouser'), array(
+            "userdata" => $userdata,
+            "partnerdata" => $partnerdata
+        ));
+    }
+
+    
+    public function mysubscription(Request $request)
+    {
+        //        dd($id);
+        $userdata = auth()->user();
+        $partner = $userdata->partner;
+        $partnerdata = array(
+            'name' => $partner->name,
+            'logo' => $partner->logo,
+            'pri_color' => $partner->pri_color ? $partner->pri_color : "#8cc640",
+            'sec_color' => $partner->sec_color,
+        );
+        //dd($partner["id"]);
+
+        $params['select'] = ['subscriptions.*', 'subscription_plans.plan_name'];
+        $params['where'] = ['subscriptions.user_id'=>$userdata->id];
+        $params['join'] = ['subscription_plans,subscriptions.plan_id,=,subscription_plans.id'];
+        $subscriptions = $this->subscriptionsRepository->getByParams($params);
+        
+        if (session('success_message')) {
+            Alert::success('Success', session('success_message'));
+        }
+        return view('partner.mysubscription', compact('subscriptions', $subscriptions), array(
+            "userdata" => $userdata,
+            "partnerdata" => $partnerdata
+        ));
+    }
+
+    
+    public function allusersubscription(Request $request)
+    {
+        //        dd($id);
+        $userdata = auth()->user();
+        $partner = $userdata->partner;
+        $partnerdata = array(
+            'name' => $partner->name,
+            'logo' => $partner->logo,
+            'pri_color' => $partner->pri_color ? $partner->pri_color : "#8cc640",
+            'sec_color' => $partner->sec_color,
+        );
+        //dd($partner["id"]);
+
+        if($userdata->role == 'corporate'){
+            $corporates = User::where('corporate_id', $userdata->id)->get();
+            if($corporates){
+                foreach($corporates as $corpo){
+                    $allusers[] = $corpo->id;
+                }    
+            } else {
+                $allusers = array();
+            }
+        } elseif($userdata->role == 'partner'){
+            $partners = User::where('partner_id', $userdata->id)->get();
+            if($partners){
+                foreach($partners as $partn){
+                    $allusers[] = $partn->id;
+                }    
+            } else {
+                $allusers = array();
+            }
+        }
+
+        $params['select'] = ['subscriptions.*', 'users.name as uname'];
+        $params['in'] = ['subscriptions.user_id'=>$allusers];
+        $params['join'] = ['users,users.id,=,subscriptions.user_id'];
+        $subscriptions = $this->subscriptionsRepository->getByParams($params);
+       
+        if (session('success_message')) {
+            Alert::success('Success', session('success_message'));
+        }
+        return view('partner.allusersubscription', compact('subscriptions', $subscriptions), array(
+            "userdata" => $userdata,
+            "partnerdata" => $partnerdata
+        ));
+    }
+
+    public function assignusersubscription(Request $request)
+    {
+        //        dd($id);
+        $userdata = auth()->user();
+        $partner = $userdata->partner;
+        $partnerdata = array(
+            'name' => $partner->name,
+            'logo' => $partner->logo,
+            'pri_color' => $partner->pri_color ? $partner->pri_color : "#8cc640",
+            'sec_color' => $partner->sec_color,
+        );
+        //dd($partner["id"]);
+
+        if($userdata->role == 'corporate'){
+            $corporates = User::where('corporate_id', $userdata->id)->get();
+            if($corporates){
+                foreach($corporates as $corpo){
+                    $allusers[] = $corpo->id;
+                }    
+            } else {
+                $allusers = array();
+            }
+        } elseif($userdata->role == 'partner'){
+            $partners = User::where('partner_id', $userdata->id)->get();
+            if($partners){
+                foreach($partners as $partn){
+                    $allusers[] = $partn->id;
+                } 
+            } else {
+                $allusers = array();
+            }
+        }
+      
+        if($allusers){
+            $users = User::where('role', '=', 'user')->whereIn('id', $allusers)->get();
+        } else {
+            $users = array();
+        }
+       
+        if (session('success_message')) {
+            Alert::success('Success', session('success_message'));
+        }
+        return view('partner.assignusersubscription', compact('users'), array(
+            "userdata" => $userdata,
+            "partnerdata" => $partnerdata
+        ));
+    }
+
+    public function saveassignusersub(Request $request)
+    {
+            $this->validate(request(), [
+                'user_id' => 'required',
+                'current_period_start' => 'required',
+                'current_period_end' => 'required',
+            ]);
+        /* save merchant */
+        $user = [];
+      
+        $user['user_id'] = $request->user_id;
+        $user['numlicence'] = $request->numlicence;
+        $user['amount'] = 0;
+        $user['current_period_start'] = $request->current_period_start;
+        $user['current_period_end'] = $request->current_period_end;
+        $user['plan_id'] = 0;
+        $user['created_at'] = date("Y-m-d H:i:s");
+        $user['status'] = 'active';
+      
+        $addUser = $this->subscriptionsRepository->save($user);
+        if ($addUser) {
+            if(!empty($request->id)){
+                $message = 'Record updated successfully.';
+            } else {
+                $activtylog['user_id'] = Auth::user()->id;
+                    $activtylog['activity'] = 'Assign subscription for user';
+                    $activtylog['status'] = 'active';
+                    $activtylog['updated_at'] = date("Y-m-d H:i:s");
+                    $activtylogadded = $this->activitylogRepository->save($activtylog);
+
+                 
+                $message = 'Record added successfully.';
+            }
+
+           return redirect()->route('allusersubscription')->with('success', $message);
+
+            
+        } else {
+            return redirect()->back()->withErrors('Submission Failed')->withInput();
+        }
+    }
+
+    
+    public function revenueuserreport(Request $request)
+    {
+        //        dd($id);
+        $userdata = auth()->user();
+        $partner = $userdata->partner;
+        $partnerdata = array(
+            'name' => $partner->name,
+            'logo' => $partner->logo,
+            'pri_color' => $partner->pri_color ? $partner->pri_color : "#8cc640",
+            'sec_color' => $partner->sec_color,
+        );
+        //dd($partner["id"]);
+
+        $params = array();
+        $params['select'] = [\DB::raw('subscriptions.*,subscription_plans.plan_name')];
+        $params['where'] = ['subscriptions.user_id'=>$userdata->id];
+        $params['join'] = ['subscription_plans,subscriptions.plan_id,=,subscription_plans.id'];
+        $subscriptionspartner = $this->subscriptionsRepository->getByParams($params);
+        if(empty($subscriptionspartner[0])){
+            $numlicence = 0;
+        } else {
+            $numlicence = $subscriptionspartner[0]->numlicence;
+        }
+        
+        if($userdata->role == 'corporate'){
+            $corporates = User::where('corporate_id', $userdata->id)->get();
+            if($corporates){
+                foreach($corporates as $corpo){
+                    $allusers[] = $corpo->id;
+                }    
+            } else {
+                $allusers = array();
+            }
+        } elseif($userdata->role == 'partner'){
+            $partners = User::where('partner_id', $userdata->id)->get();
+            if($partners){
+                foreach($partners as $partn){
+                    $allusers[] = $partn->id;
+                }    
+            } else {
+                $allusers = array();
+            }
+        }
+
+        $params = array();
+        $params['select'] = ['subscriptions.*', 'users.name as uname'];
+        $params['in'] = ['subscriptions.user_id'=>$allusers];
+        $params['join'] = ['users,users.id,=,subscriptions.user_id'];
+        $subscriptions = $this->subscriptionsRepository->getByParams($params);
+        $usersubscriptions = count($subscriptions);
+
+        $selfubscription = $numlicence - $usersubscriptions;
+
+        $befdate7 = date('Y-m-d', strtotime('-7 days'));
+        $befdate6 = date('Y-m-d', strtotime('-6 days'));
+        $befdate5 = date('Y-m-d', strtotime('-5 days'));
+        $befdate4 = date('Y-m-d', strtotime('-4 days'));
+        $befdate3 = date('Y-m-d', strtotime('-3 days'));
+        $befdate2 = date('Y-m-d', strtotime('-2 days'));
+        $befdate1 = date('Y-m-d', strtotime('-1 days'));
+        $befdate11 = date('Y-m-d');
+
+        $one = $befdate7;
+        $two = $befdate6;
+        $three = $befdate5;
+        $four = $befdate4;
+        $five = $befdate3;
+        $six = $befdate2;
+        $seven = $befdate1;
+        $eight = $befdate11;
+
+        // print_r($allusers);
+
+        $subscriptionscorporatelicett7 = DB::table('subscriptions')
+        ->select(\DB::raw('sum(subscriptions.numlicence) as totalnumlicence,subscriptions.*,DATE_FORMAT(subscriptions.created_at, "%Y-%m-%d") as datt'))
+        ->where(\DB::raw('DATE_FORMAT(subscriptions.created_at, "%Y-%m-%d")'), '=',  $befdate7)
+        ->where('subscriptions.status', '=',  'active')
+        ->where('subscriptions.amount', '=',  '0')
+        ->whereIn('subscriptions.user_id', $allusers)
+        ->groupBy('datt')
+        ->get();
+        
+        $subscriptionscorporatelicett6 = DB::table('subscriptions')
+        ->select(\DB::raw('sum(subscriptions.numlicence) as totalnumlicence,subscriptions.*,DATE_FORMAT(subscriptions.created_at, "%Y-%m-%d") as datt'))
+        ->where(\DB::raw('DATE_FORMAT(subscriptions.created_at, "%Y-%m-%d")'), '=',  $befdate6)
+        ->where('subscriptions.status', '=',  'active')
+        ->where('subscriptions.amount', '=',  '0')
+        ->whereIn('subscriptions.user_id', $allusers)
+        ->groupBy('datt')
+        ->get();
+        
+        $subscriptionscorporatelicett5 = DB::table('subscriptions')
+        ->select(\DB::raw('sum(subscriptions.numlicence) as totalnumlicence,subscriptions.*,DATE_FORMAT(subscriptions.created_at, "%Y-%m-%d") as datt'))
+        ->where(\DB::raw('DATE_FORMAT(subscriptions.created_at, "%Y-%m-%d")'), '=',  $befdate5)
+        ->where('subscriptions.status', '=',  'active')
+        ->where('subscriptions.amount', '=',  '0')
+        ->whereIn('subscriptions.user_id', $allusers)
+        ->groupBy('datt')
+        ->get();
+        
+        $subscriptionscorporatelicett4 = DB::table('subscriptions')
+        ->select(\DB::raw('sum(subscriptions.numlicence) as totalnumlicence,subscriptions.*,DATE_FORMAT(subscriptions.created_at, "%Y-%m-%d") as datt'))
+        ->where(\DB::raw('DATE_FORMAT(subscriptions.created_at, "%Y-%m-%d")'), '=',  $befdate4)
+        ->where('subscriptions.status', '=',  'active')
+        ->where('subscriptions.amount', '=',  '0')
+        ->whereIn('subscriptions.user_id', $allusers)
+        ->groupBy('datt')
+        ->get();
+        
+        $subscriptionscorporatelicett3 = DB::table('subscriptions')
+        ->select(\DB::raw('sum(subscriptions.numlicence) as totalnumlicence,subscriptions.*,DATE_FORMAT(subscriptions.created_at, "%Y-%m-%d") as datt'))
+        ->where(\DB::raw('DATE_FORMAT(subscriptions.created_at, "%Y-%m-%d")'), '=',  $befdate3)
+        ->where('subscriptions.status', '=',  'active')
+        ->where('subscriptions.amount', '=',  '0')
+        ->whereIn('subscriptions.user_id', $allusers)
+        ->groupBy('datt')
+        ->get();
+        
+        $subscriptionscorporatelicett2 = DB::table('subscriptions')
+        ->select(\DB::raw('sum(subscriptions.numlicence) as totalnumlicence,subscriptions.*,DATE_FORMAT(subscriptions.created_at, "%Y-%m-%d") as datt'))
+        ->where(\DB::raw('DATE_FORMAT(subscriptions.created_at, "%Y-%m-%d")'), '=',  $befdate2)
+        ->where('subscriptions.status', '=',  'active')
+        ->where('subscriptions.amount', '=',  '0')
+        ->whereIn('subscriptions.user_id', $allusers)
+        ->groupBy('datt')
+        ->get();
+        
+        $subscriptionscorporatelicett1 = DB::table('subscriptions')
+        ->select(\DB::raw('sum(subscriptions.numlicence) as totalnumlicence,subscriptions.*,DATE_FORMAT(subscriptions.created_at, "%Y-%m-%d") as datt'))
+        ->where(\DB::raw('DATE_FORMAT(subscriptions.created_at, "%Y-%m-%d")'), '=',  $befdate1)
+        ->where('subscriptions.status', '=',  'active')
+        ->where('subscriptions.amount', '=',  '0')
+        ->whereIn('subscriptions.user_id', $allusers)
+        ->groupBy('datt')
+        ->get();
+        
+        $subscriptionscorporatelicett11 = DB::table('subscriptions')
+        ->select(\DB::raw('sum(subscriptions.numlicence) as totalnumlicence,subscriptions.*,DATE_FORMAT(subscriptions.created_at, "%Y-%m-%d") as datt'))
+        ->where(\DB::raw('DATE_FORMAT(subscriptions.created_at, "%Y-%m-%d")'), '=',  $befdate11)
+        ->where('subscriptions.status', '=',  'active')
+        ->where('subscriptions.amount', '=',  '0')
+        ->whereIn('subscriptions.user_id', $allusers)
+        ->groupBy('datt')
+        ->get();
+
+        $onev = isset($subscriptionscorporatelicett7[0]) ? $subscriptionscorporatelicett7[0]->totalnumlicence : 0;
+        $twov = isset($subscriptionscorporatelicett6[0]) ? $subscriptionscorporatelicett6[0]->totalnumlicence : 0;
+        $threev = isset($subscriptionscorporatelicett5[0]) ? $subscriptionscorporatelicett5[0]->totalnumlicence : 0;
+        $fourv = isset($subscriptionscorporatelicett4[0]) ? $subscriptionscorporatelicett4[0]->totalnumlicence : 0;
+        $fivev = isset($subscriptionscorporatelicett3[0]) ? $subscriptionscorporatelicett3[0]->totalnumlicence : 0;
+        $sixv = isset($subscriptionscorporatelicett2[0]) ? $subscriptionscorporatelicett2[0]->totalnumlicence : 0;
+        $sevenv = isset($subscriptionscorporatelicett1[0]) ? $subscriptionscorporatelicett1[0]->totalnumlicence : 0;
+        $eightv = isset($subscriptionscorporatelicett11[0]) ? $subscriptionscorporatelicett11[0]->totalnumlicence : 0;
+      
+     
+        return view('partner.revenueuserreport', [
+            "userdata" => $userdata,  "partnerdata" => $partnerdata, "usersubscriptions" => $usersubscriptions,  "selfubscription" => $selfubscription, "one" => $one, "two" => $two, "three" => $three, "four" => $four, "five" => $five, "six" => $six, "seven" => $seven, "eight" => $eight, "onev" => $onev, "twov" => $twov, "threev" => $threev, "fourv" => $fourv, "fivev" => $fivev, "sixv" => $sixv, "sevenv" => $sevenv, "eightv" => $eightv
+        ]);
+    }
+
+}
